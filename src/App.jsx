@@ -15,10 +15,19 @@ const movieRows = [
 
 const showColors = ['#e50914', '#4c1d95', '#0ea5e9', '#f59e0b', '#10b981', '#ec4899'];
 
+function getTotalShowCount(rows) {
+  return rows.reduce((total, row) => total + row.shows.length, 0);
+}
+
 function NavBar() {
+  const totalShows = getTotalShowCount(movieRows);
+
   return (
     <header className="navbar">
-      <h1 className="logo">NETFLIX</h1>
+      <div className="logo-wrap">
+        <h1 className="logo">NETFLIX</h1>
+        <p className="catalog-count">{totalShows} Titles</p>
+      </div>
       <nav>
         <ul>
           <li>Home</li>
