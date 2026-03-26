@@ -37,6 +37,18 @@ body {
   font-size: 1.7rem;
 }
 
+.logo-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.catalog-count {
+  color: #9ca3af;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .navbar ul {
   display: flex;
   list-style: none;
