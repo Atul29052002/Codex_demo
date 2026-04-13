@@ -1,108 +1,65 @@
 import streamlit as st
+import pandas as pd
+import numpy as np
 
-movie_rows = [
-    {
-        "title": "Trending Now",
-        "shows": ["Stranger Things", "You", "Wednesday", "Lupin", "Arcane", "The Witcher"],
-    },
-    {
-        "title": "Top Picks for You",
-        "shows": ["Peaky Blinders", "Money Heist", "Dark", "Ozark", "Black Mirror", "Narcos"],
-    },
-    {
-        "title": "Continue Watching",
-        "shows": ["The Crown", "Breaking Bad", "The Night Agent", "The Sandman", "Bodies", "Cobra Kai"],
-    },
-]
-
-show_colors = ["#e50914", "#4c1d95", "#0ea5e9", "#f59e0b", "#10b981", "#ec4899"]
+st.set_page_config(page_title="Narration Generator", page_icon="🧠", layout="wide")
 
 
-def total_show_count(rows: list[dict]) -> int:
-    return sum(len(row["shows"]) for row in rows)
+def make_synthetic_data(months: int = 12, seed: int = 7) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range(end=pd.Timestamp.today().normalize(), periods=months, freq="M")
+    base = np.linspace(95000, 130000, months)
+    seasonality = 9000 * np.sin(np.linspace(0, 2 * np.pi, months))
+    noise = rng.normal(0, 4000, months)
+    revenue = np.maximum(base + seasonality + noise, 1000)
+    target = np.linspace(100000, 125000, months)
+    return pd.DataFrame({"Month": dates, "Revenue": revenue.round(0), "Target": target.round(0)})
 
 
-st.set_page_config(page_title="Netflix Clone - Streamlit", layout="wide")
+def generate_narration(df: pd.DataFrame) -> str:
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    mom_pct = ((latest["Revenue"] - prev["Revenue"]) / prev["Revenue"]) * 100
+    target_gap = latest["Revenue"] - latest["Target"]
+    avg_revenue = df["Revenue"].mean()
 
-st.markdown(
-    """
-    <style>
-      .stApp { background: #141414; color: #f5f5f5; }
-      .navbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1.25rem;
-      }
-      .logo { color: #e50914; font-size: 2rem; font-weight: 700; letter-spacing: 1px; }
-      .meta { color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
-      .hero {
-        background: radial-gradient(circle at 20% 10%, #1f2937, #111 55%);
-        border-radius: 14px;
-        padding: 3rem 2rem;
-        margin-bottom: 1.5rem;
-      }
-      .badge {
-        display: inline-block;
-        background: #e50914;
-        border-radius: 999px;
-        padding: 0.2rem 0.6rem;
-        font-size: 0.8rem;
-        margin-bottom: 0.8rem;
-      }
-      .hero-title { font-size: clamp(2rem, 3vw, 3rem); font-weight: 700; margin: 0.2rem 0 0.8rem; }
-      .hero-text { color: #d1d5db; max-width: 620px; margin-bottom: 1rem; }
-      .section-title { font-size: 1.2rem; margin: 1rem 0 0.7rem; font-weight: 600; }
-      .card {
-        border-radius: 10px;
-        padding: 0.8rem;
-        min-height: 150px;
-        display: flex;
-        align-items: flex-end;
-        font-weight: 600;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    direction = "increased" if mom_pct >= 0 else "declined"
+    target_status = "above" if target_gap >= 0 else "below"
 
-st.markdown(
-    f"""
-    <div class=\"navbar\">
-      <div>
-        <div class=\"logo\">NETFLIX</div>
-        <div class=\"meta\">{total_show_count(movie_rows)} Titles</div>
-      </div>
-      <div class=\"meta\">Home · TV Shows · Movies · My List</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    return (
+        f"In {latest['Month'].strftime('%B %Y')}, revenue was ${latest['Revenue']:,.0f}, "
+        f"which {direction} by {abs(mom_pct):.1f}% month-over-month. "
+        f"Performance landed ${abs(target_gap):,.0f} {target_status} target. "
+        f"Average monthly revenue across the period is ${avg_revenue:,.0f}. "
+        f"Recommended action: prioritize channels driving the strongest recent growth "
+        f"and review underperforming segments if target attainment remains inconsistent."
+    )
 
-st.markdown(
-    """
-    <section class="hero">
-      <div class="badge">New Series</div>
-      <h2 class="hero-title">Galactic Frontier</h2>
-      <p class="hero-text">A reluctant pilot joins a rebel crew to expose a hidden empire conspiracy across the stars.</p>
-    </section>
-    """,
-    unsafe_allow_html=True,
-)
 
-for row in movie_rows:
-    st.markdown(f"<h3 class='section-title'>{row['title']}</h3>", unsafe_allow_html=True)
-    columns = st.columns(len(row["shows"]))
-    for idx, (col, show) in enumerate(zip(columns, row["shows"], strict=False)):
-        color = show_colors[idx % len(show_colors)]
-        with col:
-            st.markdown(
-                (
-                    "<div class='card' style=\""
-                    f"background: linear-gradient(140deg, {color}, #111827);"
-                    "\">"
-                    f"{show}"
-                    "</div>"
-                ),
-                unsafe_allow_html=True,
-            )
+st.title("🧠 Analytics Report Narration Generator")
+st.caption("Simple Streamlit UI demo with synthetic KPI data and auto-written narration.")
+
+left, right = st.columns([1, 2])
+
+with left:
+    st.subheader("Settings")
+    months = st.slider("Number of months", min_value=6, max_value=36, value=12)
+    seed = st.number_input("Random seed", min_value=1, max_value=1000, value=7)
+
+    if st.button("Generate Report"):
+        st.session_state["df"] = make_synthetic_data(months=months, seed=seed)
+
+if "df" not in st.session_state:
+    st.session_state["df"] = make_synthetic_data()
+
+df = st.session_state["df"]
+
+with right:
+    st.subheader("Revenue vs Target")
+    st.line_chart(df.set_index("Month")[["Revenue", "Target"]])
+
+st.subheader("Data Preview")
+st.dataframe(df, use_container_width=True)
+
+st.subheader("Generated Narration")
+st.success(generate_narration(df))
