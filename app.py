@@ -1,108 +1,188 @@
+import os
+import tempfile
+from typing import List
+
+import numpy as np
+import pandas as pd
 import streamlit as st
-
-movie_rows = [
-    {
-        "title": "Trending Now",
-        "shows": ["Stranger Things", "You", "Wednesday", "Lupin", "Arcane", "The Witcher"],
-    },
-    {
-        "title": "Top Picks for You",
-        "shows": ["Peaky Blinders", "Money Heist", "Dark", "Ozark", "Black Mirror", "Narcos"],
-    },
-    {
-        "title": "Continue Watching",
-        "shows": ["The Crown", "Breaking Bad", "The Night Agent", "The Sandman", "Bodies", "Cobra Kai"],
-    },
-]
-
-show_colors = ["#e50914", "#4c1d95", "#0ea5e9", "#f59e0b", "#10b981", "#ec4899"]
+from langchain.prompts import PromptTemplate
+from langchain.schema import Document
+from langchain_community.vectorstores import FAISS
+from langchain_chroma import Chroma
+from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 
-def total_show_count(rows: list[dict]) -> int:
-    return sum(len(row["shows"]) for row in rows)
+st.set_page_config(page_title="AI Report Narration Studio", page_icon="📊", layout="wide")
 
 
-st.set_page_config(page_title="Netflix Clone - Streamlit", layout="wide")
+@st.cache_data(show_spinner=False)
+def make_synthetic_data(months: int = 12, seed: int = 17) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range(end=pd.Timestamp.today().normalize(), periods=months, freq="ME")
+    regions = ["North America", "Europe", "APAC"]
+    products = ["Core", "Premium", "Enterprise"]
 
-st.markdown(
-    """
-    <style>
-      .stApp { background: #141414; color: #f5f5f5; }
-      .navbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1.25rem;
-      }
-      .logo { color: #e50914; font-size: 2rem; font-weight: 700; letter-spacing: 1px; }
-      .meta { color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
-      .hero {
-        background: radial-gradient(circle at 20% 10%, #1f2937, #111 55%);
-        border-radius: 14px;
-        padding: 3rem 2rem;
-        margin-bottom: 1.5rem;
-      }
-      .badge {
-        display: inline-block;
-        background: #e50914;
-        border-radius: 999px;
-        padding: 0.2rem 0.6rem;
-        font-size: 0.8rem;
-        margin-bottom: 0.8rem;
-      }
-      .hero-title { font-size: clamp(2rem, 3vw, 3rem); font-weight: 700; margin: 0.2rem 0 0.8rem; }
-      .hero-text { color: #d1d5db; max-width: 620px; margin-bottom: 1rem; }
-      .section-title { font-size: 1.2rem; margin: 1rem 0 0.7rem; font-weight: 600; }
-      .card {
-        border-radius: 10px;
-        padding: 0.8rem;
-        min-height: 150px;
-        display: flex;
-        align-items: flex-end;
-        font-weight: 600;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
+    rows = []
+    for dt in dates:
+        for region in regions:
+            for product in products:
+                trend = 15000 + (dt.month * 130)
+                seasonality = 2200 * np.sin((dt.month / 12) * 2 * np.pi)
+                region_bias = {"North America": 4200, "Europe": 2800, "APAC": 3500}[region]
+                product_bias = {"Core": 0, "Premium": 1700, "Enterprise": 3100}[product]
+                noise = rng.normal(0, 950)
+                revenue = max(trend + seasonality + region_bias + product_bias + noise, 200)
+                target = revenue * rng.uniform(0.9, 1.08)
+                margin = rng.uniform(0.17, 0.42)
+                rows.append(
+                    {
+                        "month": dt,
+                        "region": region,
+                        "product": product,
+                        "revenue": round(revenue, 2),
+                        "target": round(target, 2),
+                        "margin": round(margin, 4),
+                    }
+                )
+
+    return pd.DataFrame(rows)
+
+
+def build_documents(df: pd.DataFrame) -> List[Document]:
+    docs: List[Document] = []
+    grouped = (
+        df.groupby(["month", "region"], as_index=False)
+        .agg(revenue=("revenue", "sum"), target=("target", "sum"), margin=("margin", "mean"))
+        .sort_values("month")
+    )
+
+    for _, row in grouped.iterrows():
+        gap = row["revenue"] - row["target"]
+        content = (
+            f"Month: {row['month'].strftime('%Y-%m')}; Region: {row['region']}; "
+            f"Revenue: ${row['revenue']:,.0f}; Target: ${row['target']:,.0f}; "
+            f"Gap: ${gap:,.0f}; Avg margin: {row['margin']*100:.1f}%"
+        )
+        docs.append(Document(page_content=content, metadata={"region": row["region"]}))
+
+    return docs
+
+
+def get_embeddings(model_name: str) -> OllamaEmbeddings:
+    return OllamaEmbeddings(model=model_name)
+
+
+def get_vector_store(documents: List[Document], embeddings: OllamaEmbeddings, backend: str):
+    if backend == "Chroma":
+        persist_dir = tempfile.mkdtemp(prefix="chroma_narration_")
+        return Chroma.from_documents(documents=documents, embedding=embeddings, persist_directory=persist_dir)
+    return FAISS.from_documents(documents=documents, embedding=embeddings)
+
+
+def build_kpi_snapshot(df: pd.DataFrame) -> str:
+    monthly = df.groupby("month", as_index=False).agg(revenue=("revenue", "sum"), target=("target", "sum"))
+    latest = monthly.iloc[-1]
+    previous = monthly.iloc[-2]
+    mom = ((latest["revenue"] - previous["revenue"]) / previous["revenue"]) * 100
+    gap = latest["revenue"] - latest["target"]
+
+    best_region = (
+        df[df["month"] == latest["month"]]
+        .groupby("region", as_index=False)
+        .agg(revenue=("revenue", "sum"))
+        .sort_values("revenue", ascending=False)
+        .iloc[0]
+    )
+
+    return (
+        f"Latest month: {latest['month'].strftime('%B %Y')} | Revenue ${latest['revenue']:,.0f} | "
+        f"MoM {mom:+.1f}% | Target gap ${gap:,.0f} | Best region {best_region['region']} "
+        f"(${best_region['revenue']:,.0f})"
+    )
+
+
+def generate_narration(df: pd.DataFrame, backend: str, llm_model: str, embed_model: str, question: str) -> str:
+    docs = build_documents(df)
+    embeddings = get_embeddings(embed_model)
+    vector_store = get_vector_store(docs, embeddings, backend)
+    retrieved_docs = vector_store.similarity_search(question, k=6)
+
+    context = "\n".join([d.page_content for d in retrieved_docs])
+    kpi_snapshot = build_kpi_snapshot(df)
+
+    prompt = PromptTemplate(
+        input_variables=["kpi_snapshot", "context", "question"],
+        template=(
+            "You are a business analytics narrator. Write a concise, factual report narration in bullet points.\n"
+            "Include: summary, key drivers, anomalies/risks, and recommended actions.\n"
+            "Do not invent numbers.\n\n"
+            "KPI Snapshot:\n{kpi_snapshot}\n\n"
+            "Retrieved Evidence:\n{context}\n\n"
+            "User ask: {question}\n"
+        ),
+    )
+
+    llm = ChatOllama(model=llm_model, temperature=0.2)
+    chain_input = prompt.format(kpi_snapshot=kpi_snapshot, context=context, question=question)
+    return llm.invoke(chain_input).content
+
+
+st.title("📊 AI Report Narration Studio")
+st.caption("LangChain + Chroma/FAISS + Ollama LLM for analytics storytelling.")
+
+with st.sidebar:
+    st.header("Controls")
+    months = st.slider("Months of synthetic data", min_value=6, max_value=36, value=12)
+    seed = st.number_input("Random seed", min_value=1, max_value=9999, value=17)
+    vector_backend = st.selectbox("Vector DB", options=["Chroma", "FAISS"], index=0)
+    llm_model = st.text_input("Ollama LLM model", value="llama3.2")
+    embed_model = st.text_input("Ollama embedding model", value="nomic-embed-text")
+
+if "data" not in st.session_state:
+    st.session_state["data"] = make_synthetic_data(months=months, seed=seed)
+
+if st.button("Regenerate synthetic dataset"):
+    st.session_state["data"] = make_synthetic_data(months=months, seed=seed)
+
+df = st.session_state["data"]
+
+c1, c2 = st.columns(2)
+with c1:
+    st.subheader("Revenue by Month")
+    monthly = df.groupby("month", as_index=False).agg(revenue=("revenue", "sum"), target=("target", "sum"))
+    st.line_chart(monthly.set_index("month")[["revenue", "target"]])
+
+with c2:
+    st.subheader("Regional mix (latest month)")
+    latest_month = df["month"].max()
+    pie_data = (
+        df[df["month"] == latest_month]
+        .groupby("region", as_index=False)
+        .agg(revenue=("revenue", "sum"))
+        .set_index("region")
+    )
+    st.bar_chart(pie_data)
+
+st.subheader("Data Preview")
+st.dataframe(df, use_container_width=True)
+
+question = st.text_area(
+    "Narration request",
+    value="Create an executive summary for the latest report and suggest 3 actions.",
 )
 
-st.markdown(
-    f"""
-    <div class=\"navbar\">
-      <div>
-        <div class=\"logo\">NETFLIX</div>
-        <div class=\"meta\">{total_show_count(movie_rows)} Titles</div>
-      </div>
-      <div class=\"meta\">Home · TV Shows · Movies · My List</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    """
-    <section class="hero">
-      <div class="badge">New Series</div>
-      <h2 class="hero-title">Galactic Frontier</h2>
-      <p class="hero-text">A reluctant pilot joins a rebel crew to expose a hidden empire conspiracy across the stars.</p>
-    </section>
-    """,
-    unsafe_allow_html=True,
-)
-
-for row in movie_rows:
-    st.markdown(f"<h3 class='section-title'>{row['title']}</h3>", unsafe_allow_html=True)
-    columns = st.columns(len(row["shows"]))
-    for idx, (col, show) in enumerate(zip(columns, row["shows"], strict=False)):
-        color = show_colors[idx % len(show_colors)]
-        with col:
-            st.markdown(
-                (
-                    "<div class='card' style=\""
-                    f"background: linear-gradient(140deg, {color}, #111827);"
-                    "\">"
-                    f"{show}"
-                    "</div>"
-                ),
-                unsafe_allow_html=True,
-            )
+if st.button("Generate AI narration"):
+    try:
+        narration = generate_narration(
+            df=df,
+            backend=vector_backend,
+            llm_model=llm_model,
+            embed_model=embed_model,
+            question=question,
+        )
+        st.success(narration)
+    except Exception as exc:  # keep app useful if local models are not pulled yet
+        st.error(
+            "Generation failed. Ensure Ollama is running and models are pulled. "
+            f"Technical details: {exc}"
+        )

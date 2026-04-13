@@ -1,17 +1,34 @@
-# Netflix Clone (Streamlit)
+# AI Report Narration Studio (Streamlit + LangChain)
 
-A simple Netflix-inspired landing page rebuilt with **Streamlit**.
+This project is a simple web-based narration generator for analytics reports.
 
-## Run locally
+## What it uses
+
+- **Streamlit** for UI
+- **LangChain** orchestration
+- **Chroma DB** and **FAISS** vector retrieval options
+- **Ollama LLM** (`llama3.2` by default) for narrative generation
+- **Ollama embeddings** (`nomic-embed-text` by default)
+
+## Quick start
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
+# Ensure Ollama is running locally and models are available:
+# ollama pull llama3.2
+# ollama pull nomic-embed-text
 streamlit run app.py
 ```
 
+## How it works
+
+1. Generates synthetic monthly KPI data by region/product.
+2. Converts KPI slices into LangChain `Document` objects.
+3. Indexes documents in either **Chroma** or **FAISS**.
+4. Retrieves evidence for a user narration query.
+5. Uses Ollama LLM to generate concise executive narration.
+
 ## Notes
 
-- This version replaces the previous React/Vite front end with a single Streamlit app.
-- UI styling is done using custom CSS embedded in `app.py`.
+- If generation fails, verify local Ollama daemon/model availability.
+- You can switch vector backend in the sidebar to compare retrieval behavior.
